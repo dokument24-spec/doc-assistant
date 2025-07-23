@@ -8,10 +8,8 @@ import re
 from oauth2client.service_account import ServiceAccountCredentials
 from docx import Document
 from flask import Flask, request
-import threading
 
 BOT_TOKEN = '7640880064:AAEOqKU4mWP06Ob96K3h4VDfrIhfK164Eg0'
-WEBHOOK_URL = f"https://flask-hello-world-1lwa.onrender.com/{BOT_TOKEN}"
 ADMIN_ID = 5780051172
 SHEET_NAME = "DocExpress_Заявки"
 
@@ -210,12 +208,12 @@ def handle_files(message):
             caption = f"📎 Файл от {username}\nID: {cid}\nТип документа: {doc_type}"
             bot.send_document(ADMIN_ID, f, caption=caption)
 
-# === Flask сервер для Render ===
+# === Flask сервер (только для Render) ===
 app = Flask(__name__)
 
 @app.route('/')
 def index():
-    return "Оформлятор работает."
+    return "Привет, мир!"
 
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
@@ -223,11 +221,7 @@ def webhook():
     bot.process_new_updates([update])
     return "ok", 200
 
-def run():
+if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8080)
 
-if __name__ == '__main__':
-    bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL)
-    threading.Thread(target=run).start()
 
