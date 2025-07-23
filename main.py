@@ -6,8 +6,7 @@ import os
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from docx import Document
-import requests
-from flask import Flask
+from flask import Flask, request
 import threading
 
 BOT_TOKEN = '7640880064:AAEOqKU4mWP06Ob96K3h4VDfrIhfK164Eg0'
@@ -25,7 +24,7 @@ creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", sco
 client = gspread.authorize(creds)
 sheet = client.open(SHEET_NAME).sheet1
 
-# === Сценарии с человеческими вопросами ===
+# === Сценарии ===
 scenarios = {
     "Договор подряда": [
         "Как зовут заказчика?",
@@ -93,7 +92,7 @@ def start(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     for key in scenarios.keys():
         markup.add(types.KeyboardButton(key))
-    bot.send_message(message.chat.id, "👋 Привет! Выбери тип документа или опиши задачу:", reply_markup=markup)
+    bot.send_message(message.chat.id, "👋 Привет! Я Оформлятор — юридический помощник.\n\nВыберите тип документа или опишите задачу:", reply_markup=markup)
 
 @bot.message_handler(func=lambda msg: msg.text in scenarios.keys())
 def start_scenario(message):
@@ -147,15 +146,32 @@ def confirm_send(message):
         bot.send_message(chat_id, "❌ Ок, начнём заново. Выберите тип документа.")
         start(message)
 
-# Flask сервер для поддержки активности на Render/Replit
+# === Обработка голосовых сообщений ===
+@bot.message_handler(content_types=['voice'])
+def handle_voice(message):
+    bot.send_message(message.chat.id, "⚠️ Я пока не умею распознавать голосовые. Напишите, пожалуйста, текстом 🙏")
+
+# === Обработка вложений ===
+@bot.message_handler(content_types=['document', 'photo'])
+def handle_files(message):
+    bot.send_message(message.chat.id, "🗂 Файл получен. Но пока загрузка файлов доступна только для администратора. Напишите, что нужно.")
+
+# === Flask-сервер для Webhook ===
 app = Flask(__name__)
+
 @app.route('/')
-def ping():
-    return "Бот работает"
+def index():
+    return "Бот активен."
 
-def run_flask():
-    app.run(host="0.0.0.0", port=8080)
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
+def webhook():
+    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"), bot)
+    bot.process_new_updates([update])
+    return 'ok', 200
 
-if __name__ == "__main__":
-    threading.Thread(target=run_flask).start()
-    bot.polling(none_stop=True)
+# === Запуск ===
+if __name__ == '__main__':
+    import os
+    bot.remove_webhook()
+    bot.set_webhook(url=f"https://flask-hello-world-<твоя-ссылка>.onrender.com/{BOT_TOKEN}")
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
