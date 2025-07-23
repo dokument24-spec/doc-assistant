@@ -7,7 +7,6 @@ import time
 import re
 from oauth2client.service_account import ServiceAccountCredentials
 from docx import Document
-from flask import Flask, request
 
 BOT_TOKEN = '7640880064:AAEOqKU4mWP06Ob96K3h4VDfrIhfK164Eg0'
 ADMIN_ID = 5780051172
@@ -208,19 +207,6 @@ def handle_files(message):
             caption = f"📎 Файл от {username}\nID: {cid}\nТип документа: {doc_type}"
             bot.send_document(ADMIN_ID, f, caption=caption)
 
-# === Flask Webhook ===
-app = Flask(__name__)
-
-@app.route('/')
-def index():
-    return "Оформлятор работает."
-
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
-    bot.process_new_updates([update])
-    return "ok", 200
-
+# === Запуск бота (polling) ===
 if __name__ == '__main__':
-    app.run(debug=True)
-
+    bot.polling(none_stop=True)
