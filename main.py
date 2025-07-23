@@ -208,20 +208,19 @@ def handle_files(message):
             caption = f"📎 Файл от {username}\nID: {cid}\nТип документа: {doc_type}"
             bot.send_document(ADMIN_ID, f, caption=caption)
 
-# === Flask сервер (только для Render) ===
+# === Flask Webhook ===
 app = Flask(__name__)
 
 @app.route('/')
 def index():
-    return "Привет, мир!"
+    return "Оформлятор работает."
 
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    update = telebot.types.Update.de_json(request.get_data().decode("utf-8"))
-    bot.process_new_updates([update])
-    return "ok", 200
-
-if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=8080)
-
-
+def receive_update():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return "!", 200
+    else:
+        return "Invalid content type", 403
