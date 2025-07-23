@@ -1,144 +1,161 @@
 import telebot
 from telebot import types
 import datetime
+import re
+import os
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from flask import Flask, request
+from docx import Document
+import requests
+from flask import Flask
 import threading
-import re
 
-# === НАСТРОЙКИ ===
 BOT_TOKEN = '7640880064:AAEOqKU4mWP06Ob96K3h4VDfrIhfK164Eg0'
-GOOGLE_SHEET = 'DocExpress_Заявки'
-ADMIN_CHAT_ID = 5780051172
+ADMIN_ID = 5780051172
+SHEET_NAME = "DocExpress_Заявки"
 
-# === ДОСТУП К GOOGLE SHEETS ===
+bot = telebot.TeleBot(BOT_TOKEN)
+user_data = {}
+current_step = {}
+current_type = {}
+
+# === Google Таблицы ===
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 client = gspread.authorize(creds)
-sheet = client.open(GOOGLE_SHEET).sheet1
+sheet = client.open(SHEET_NAME).sheet1
 
-# === ИНИЦИАЛИЗАЦИЯ ===
-bot = telebot.TeleBot(BOT_TOKEN)
-app = Flask(__name__)
-user_states = {}
+# === Сценарии с человеческими вопросами ===
+scenarios = {
+    "Договор подряда": [
+        "Как зовут заказчика?",
+        "Как зовут исполнителя?",
+        "Какие работы нужно выполнить?",
+        "До какой даты нужно всё сделать?",
+        "Сколько вы договорились за работу?",
+        "Укажите номер телефона для связи"
+    ],
+    "Жалоба в УК": [
+        "На каком адресе произошла проблема?",
+        "Что произошло? (опишите ситуацию своими словами)",
+        "Когда это случилось?",
+        "Есть ли у вас доказательства? (фото/видео)",
+        "Оставьте номер телефона для связи"
+    ],
+    "Заявление в суд": [
+        "Кто подаёт заявление (ваше ФИО)?",
+        "Против кого подаёте заявление (ФИО ответчика)?",
+        "Что произошло? Расскажите суть конфликта простыми словами.",
+        "Что вы хотите, чтобы суд решил?",
+        "Укажите ваш номер телефона"
+    ],
+    "Претензия продавцу": [
+        "Где и что вы купили?",
+        "Что случилось с товаром/услугой?",
+        "Как вы хотите решить этот вопрос? (например: возврат, замена, ремонт)",
+        "Номер телефона для связи"
+    ],
+    "Акт выполненных работ": [
+        "Кто заказывает работу? (ФИО или организация)",
+        "Кто выполняет работу? (ФИО или организация)",
+        "Что именно было сделано?",
+        "Когда была завершена работа?",
+        "Ваш номер телефона"
+    ],
+    "Доверенность": [
+        "Кто доверяет? (ФИО)",
+        "Кому доверяет? (ФИО)",
+        "На какие действия даётся доверенность?",
+        "На какой срок?",
+        "Ваш телефон"
+    ],
+    "Заявление о прописке": [
+        "Кто подаёт заявление (ФИО)?",
+        "Кого нужно прописать (ФИО)?",
+        "Какой адрес прописки?",
+        "Контактный номер телефона"
+    ]
+}
 
-# === СТАДИИ ===
-stages = ['name', 'phone', 'email', 'doc_type', 'task', 'complete']
+def generate_docx(doc_type, answers):
+    doc = Document()
+    doc.add_heading(doc_type, 0)
+    for i, (q, a) in enumerate(answers, 1):
+        doc.add_paragraph(f"{i}. {q}")
+        doc.add_paragraph(f"   ➤ {a}", style='List Bullet')
+    filename = f"{doc_type}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+    filepath = f"/tmp/{filename}"
+    doc.save(filepath)
+    return filepath
 
-doc_types = [
-    "📝 Договор",
-    "🧾 Жалоба",
-    "📬 Заявление",
-    "📄 Претензия",
-    "📋 Акт",
-    "📎 Другое"
-]
-
-# === ВАЛИДАЦИЯ ===
-def is_valid_phone(phone):
-    return re.match(r'^\+?7\d{10}$', phone)
-
-def is_valid_email(email):
-    return re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email)
-
-# === СТАРТ ===
 @bot.message_handler(commands=['start'])
 def start(message):
-    user_states[message.chat.id] = {'stage': 'name'}
-    bot.send_message(
-        message.chat.id,
-        "👋 Добро пожаловать!\n\n"
-        "Я — цифровой помощник по оформлению документов.\n"
-        "Сейчас я задам несколько вопросов, чтобы подготовить всё грамотно и в срок.\n\n"
-        "📌 Поехали. Как вас зовут?"
-    )
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    for key in scenarios.keys():
+        markup.add(types.KeyboardButton(key))
+    bot.send_message(message.chat.id, "👋 Привет! Выбери тип документа или опиши задачу:", reply_markup=markup)
 
-# === ДИАЛОГ ===
-@bot.message_handler(func=lambda m: True)
-def handle_message(message):
-    cid = message.chat.id
-    if cid not in user_states:
-        user_states[cid] = {'stage': 'name'}
+@bot.message_handler(func=lambda msg: msg.text in scenarios.keys())
+def start_scenario(message):
+    chat_id = message.chat.id
+    current_type[chat_id] = message.text
+    current_step[chat_id] = 0
+    user_data[chat_id] = []
+    bot.send_message(chat_id, scenarios[message.text][0])
 
-    state = user_states[cid]
-    stage = state['stage']
-    text = message.text.strip()
-
-    if stage == 'name':
-        state['name'] = text
-        state['stage'] = 'phone'
-        bot.send_message(cid, "📱 Укажите, пожалуйста, ваш номер телефона в формате +7XXXXXXXXXX:")
-    
-    elif stage == 'phone':
-        if not is_valid_phone(text):
-            bot.send_message(cid, "❌ Пожалуйста, введите корректный номер: +7XXXXXXXXXX")
-            return
-        state['phone'] = text
-        state['stage'] = 'email'
-        bot.send_message(cid, "📧 Укажите ваш email для отправки готового документа:")
-    
-    elif stage == 'email':
-        if not is_valid_email(text):
-            bot.send_message(cid, "❌ Пожалуйста, введите корректный email.")
-            return
-        state['email'] = text
-        state['stage'] = 'doc_type'
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        for doc in doc_types:
-            markup.add(types.KeyboardButton(doc))
-        bot.send_message(cid, "📂 Выберите тип документа, который хотите оформить:", reply_markup=markup)
-    
-    elif stage == 'doc_type':
-        state['doc_type'] = text
-        state['stage'] = 'task'
-        bot.send_message(cid, "✍️ Пожалуйста, опишите суть задачи, включая:\n"
-                              "— для кого документ\n— по какому вопросу\n— и что важно учесть.")
-    
-    elif stage == 'task':
-        state['task'] = text
-        state['stage'] = 'complete'
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-
-        # Добавим в Google Таблицу
-        sheet.append_row([now, state['name'], state['phone'], state['email'], state['doc_type'], state['task'], ""])
-
-        # Уведомим Админа
-        msg = (
-            f"📥 Новая заявка:\n"
-            f"👤 Имя: {state['name']}\n"
-            f"📱 Телефон: {state['phone']}\n"
-            f"📧 Email: {state['email']}\n"
-            f"📄 Тип: {state['doc_type']}\n"
-            f"📝 Задача: {state['task']}"
-        )
-        bot.send_message(ADMIN_CHAT_ID, msg)
-
-        # Ответ клиенту
-        bot.send_message(cid, "✅ Спасибо! Все данные получены.\n"
-                              "📂 Ваш документ будет готов в течение 15–30 минут.\n"
-                              "Если будут уточнения — мы свяжемся.")
-
+@bot.message_handler(func=lambda msg: msg.chat.id in current_step)
+def handle_response(message):
+    chat_id = message.chat.id
+    step = current_step[chat_id]
+    scenario = scenarios[current_type[chat_id]]
+    user_data[chat_id].append((scenario[step], message.text))
+    step += 1
+    if step < len(scenario):
+        current_step[chat_id] = step
+        bot.send_message(chat_id, scenario[step])
     else:
-        bot.send_message(cid, "❗ Пожалуйста, начните заново: /start")
-        user_states[cid] = {'stage': 'name'}
+        bot.send_message(chat_id, "Проверьте, всё ли верно 👇")
+        for q, a in user_data[chat_id]:
+            bot.send_message(chat_id, f"{q}\n➤ {a}")
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add("✅ Да", "❌ Нет")
+        bot.send_message(chat_id, "Отправить этот документ?", reply_markup=markup)
+        current_step.pop(chat_id)
 
-# === FLASK-SERVER ===
-@app.route('/', methods=['GET'])
-def index():
-    return "Бот работает!"
+@bot.message_handler(func=lambda msg: msg.text in ["✅ Да", "❌ Нет"])
+def confirm_send(message):
+    chat_id = message.chat.id
+    if message.text == "✅ Да":
+        doc_type = current_type[chat_id]
+        answers = user_data[chat_id]
+        filepath = generate_docx(doc_type, answers)
 
-@app.route('/', methods=['POST'])
-def webhook():
-    bot.process_new_updates([telebot.types.Update.de_json(request.stream.read().decode("utf-8"))])
-    return '', 200
+        with open(filepath, "rb") as doc_file:
+            bot.send_document(chat_id, doc_file)
+
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        sheet.append_row([now, chat_id, doc_type] + [a for _, a in answers])
+
+        user = message.from_user
+        summary = f"📬 Новая заявка от @{user.username or 'Без ника'}\n\nТип: {doc_type}\n"
+        for q, a in answers:
+            summary += f"\n{q}\n➤ {a}"
+        bot.send_message(ADMIN_ID, summary)
+
+        bot.send_message(chat_id, "✅ Документ отправлен. Спасибо! Мы свяжемся при необходимости.")
+    else:
+        bot.send_message(chat_id, "❌ Ок, начнём заново. Выберите тип документа.")
+        start(message)
+
+# Flask сервер для поддержки активности на Render/Replit
+app = Flask(__name__)
+@app.route('/')
+def ping():
+    return "Бот работает"
 
 def run_flask():
     app.run(host="0.0.0.0", port=8080)
 
-# === ЗАПУСК ===
 if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
-    print("Бот запущен...")
-    bot.remove_webhook()
-    bot.set_webhook(url="https://flask-hello-world.onrender.com")  # ← Укажи свой Render URL
+    bot.polling(none_stop=True)
