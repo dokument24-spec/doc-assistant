@@ -5,9 +5,11 @@ import os
 import gspread
 import time
 import re
+from flask import Flask, request
 from oauth2client.service_account import ServiceAccountCredentials
 from docx import Document
 
+# === Настройки ===
 BOT_TOKEN = '7640880064:AAEOqKU4mWP06Ob96K3h4VDfrIhfK164Eg0'
 ADMIN_ID = 5780051172
 SHEET_NAME = "DocExpress_Заявки"
@@ -76,6 +78,7 @@ scenarios = {
     ]
 }
 
+# === Проверка телефона ===
 def is_valid_phone(phone):
     return re.match(r"^(\+7|8)\d{10}$", phone)
 
@@ -86,6 +89,7 @@ def can_submit(chat_id):
     last_submit_time[chat_id] = now
     return True, 0
 
+# === Генерация Word-документа ===
 def generate_docx(doc_type, answers):
     doc = Document()
     doc.add_heading(doc_type, 0)
@@ -97,6 +101,7 @@ def generate_docx(doc_type, answers):
     doc.save(filepath)
     return filepath
 
+# === Обработчики Telegram ===
 @bot.message_handler(commands=['start'])
 def start(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -207,6 +212,18 @@ def handle_files(message):
             caption = f"📎 Файл от {username}\nID: {cid}\nТип документа: {doc_type}"
             bot.send_document(ADMIN_ID, f, caption=caption)
 
-# === Запуск бота (polling) ===
+# === Flask Webhook ===
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return "Оформлятор работает."
+
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+    bot.process_new_updates([update])
+    return "ok", 200
+
 if __name__ == '__main__':
-    bot.polling(none_stop=True)
+    app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
