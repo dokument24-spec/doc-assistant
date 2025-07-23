@@ -9,9 +9,13 @@ from oauth2client.service_account import ServiceAccountCredentials
 from docx import Document
 from flask import Flask, request
 
-BOT_TOKEN = '7640880064:AAEOqKU4mWP06Ob96K3h4VDfrIhfK164Eg0'
+# === Безопасный способ чтения токена из переменной окружения ===
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = 5780051172
 SHEET_NAME = "DocExpress_Заявки"
+
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN не установлен в переменных окружения!")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 user_data = {}
@@ -224,3 +228,4 @@ def receive_update():
         return "!", 200
     else:
         return "Invalid content type", 403
+
